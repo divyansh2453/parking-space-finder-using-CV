@@ -40,6 +40,19 @@ html, body, [class*="css"] { font-family: 'Syne', sans-serif; background-color: 
 div[data-testid="stFileUploader"] { border: 2px dashed #2a2a2a !important; border-radius: 12px !important; background: #111 !important; padding: 1rem; }
 div[data-testid="stFileUploader"]:hover { border-color: #00ff88 !important; }
 .stButton > button { background: linear-gradient(135deg, #00ff88, #00cfff) !important; color: #000 !important; border: none !important; border-radius: 8px !important; font-family: 'Space Mono', monospace !important; font-weight: 700 !important; }
+
+/* Tab styling */
+.stTabs [data-baseweb="tab-list"] { gap: 8px; background: #111; padding: 6px; border-radius: 10px; border: 1px solid #222; }
+.stTabs [data-baseweb="tab"] { background: transparent; border-radius: 8px; color: #555; font-family: 'Space Mono', monospace; font-size: 0.75rem; letter-spacing: 1px; padding: 8px 20px; border: none; }
+.stTabs [aria-selected="true"] { background: linear-gradient(135deg, #00ff88, #00cfff) !important; color: #000 !important; font-weight: 700; }
+
+/* Camera info box */
+.cam-info {
+    background: #111; border: 1px solid #1a3a2a; border-radius: 12px;
+    padding: 1.5rem 2rem; margin: 1rem 0; font-family: 'Space Mono', monospace;
+    font-size: 0.75rem; color: #00ff88; letter-spacing: 1px; line-height: 2;
+}
+.cam-info span { color: #555; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -55,6 +68,9 @@ def load_positions():
 
 posList = load_positions()
 
+# ── Minimum threshold floor ───────────────────────────────────────────────────
+MIN_THRESHOLD = 400   # Auto-calibration result is always clamped to at least this
+
 
 # ── Auto-calibrate threshold ──────────────────────────────────────────────────
 def auto_calibrate(img_bgr: np.ndarray, pos_list: list):
@@ -62,6 +78,7 @@ def auto_calibrate(img_bgr: np.ndarray, pos_list: list):
     Collect nonzero pixel counts for every space, then find the natural gap
     between 'empty' and 'occupied' clusters using a histogram valley method.
     Returns (suggested_threshold, all_counts)
+    Minimum returned threshold is always MIN_THRESHOLD (400).
     """
     imgGray      = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
     imgBlur      = cv2.GaussianBlur(imgGray, (3, 3), 1)
@@ -79,7 +96,7 @@ def auto_calibrate(img_bgr: np.ndarray, pos_list: list):
         counts.append(cv2.countNonZero(crop))
 
     if not counts:
-        return 900, counts
+        return MIN_THRESHOLD, counts
 
     counts_arr = np.array(counts, dtype=float)
 
@@ -104,7 +121,8 @@ def auto_calibrate(img_bgr: np.ndarray, pos_list: list):
         high_med   = int(np.median(high_vals)) if len(high_vals) else int(median_all * 2)
         valley_val = (low_med + high_med) // 2
 
-    valley_val = max(100, min(valley_val, 2500))
+    # ── Enforce minimum floor of 400 ──────────────────────────────────────────
+    valley_val = max(MIN_THRESHOLD, min(valley_val, 2500))
     return valley_val, [int(c) for c in counts_arr]
 
 
@@ -147,43 +165,27 @@ def analyze_parking(img_bgr: np.ndarray, threshold: int):
     return cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), free_count, occupied, total
 
 
-# ── UI ────────────────────────────────────────────────────────────────────────
-st.markdown("""
-<div class="hero">
-    <h1>PARKVISION</h1>
-    <p>Intelligent Parking Space Analyzer</p>
-</div>
-""", unsafe_allow_html=True)
-
-uploaded = st.file_uploader("Upload a parking lot frame", type=["png", "jpg", "jpeg", "webp"])
-
-if uploaded is not None:
-    file_bytes = np.asarray(bytearray(uploaded.read()), dtype=np.uint8)
-    img_bgr    = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-
-    if img_bgr is None:
-        st.error("Could not decode image.")
-        st.stop()
-
+# ── Shared results renderer ───────────────────────────────────────────────────
+def render_results(img_bgr: np.ndarray, source_label: str = "Input"):
+    """Run auto-calibrate + sidebar controls + analysis + display. Shared by both tabs."""
     if len(posList) == 0:
         st.warning("⚠️ No parking positions loaded. Place `CarParkPos` in the same directory as app.py.")
-        st.stop()
+        return
 
-    # ── Auto-calibrate on this image ──
     suggested_thresh, all_counts = auto_calibrate(img_bgr, posList)
 
     # ── Sidebar controls ──
     st.sidebar.markdown("## 🎛️ Threshold Control")
     st.sidebar.markdown(f"**Auto-calibrated:** `{suggested_thresh}`")
-    st.sidebar.caption("Computed by finding the natural valley between empty and occupied pixel-count clusters for this image.")
+    st.sidebar.caption(f"Minimum floor is {MIN_THRESHOLD}. Computed by finding the natural valley between empty/occupied pixel-count clusters.")
 
     threshold = st.sidebar.slider(
         "Occupancy Threshold",
-        min_value=50,
+        min_value=MIN_THRESHOLD,       # slider also starts at 400
         max_value=2500,
         value=suggested_thresh,
         step=10,
-        help="Spaces with pixel count BELOW this = FREE (green). Raise if too many false-free; lower if too many false-occupied."
+        help=f"Minimum value is {MIN_THRESHOLD}. Spaces with pixel count BELOW this = FREE (green)."
     )
 
     if all_counts:
@@ -217,7 +219,7 @@ if uploaded is not None:
     # ── Side-by-side images ──
     col1, col2 = st.columns(2, gap="large")
     with col1:
-        st.markdown("<div class='img-label'>Original Upload</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='img-label'>{source_label}</div>", unsafe_allow_html=True)
         st.image(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB), use_container_width=True)
     with col2:
         st.markdown("<div class='img-label'>Annotated Analysis</div>", unsafe_allow_html=True)
@@ -230,10 +232,74 @@ if uploaded is not None:
     st.download_button("⬇ Download Annotated Image", data=buf,
                        file_name="parking_analysis.png", mime="image/png")
 
-else:
+
+# ── UI ────────────────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="hero">
+    <h1>PARKVISION</h1>
+    <p>Intelligent Parking Space Analyzer</p>
+</div>
+""", unsafe_allow_html=True)
+
+# ── Two tabs: Upload  |  Camera ───────────────────────────────────────────────
+tab_upload, tab_camera = st.tabs(["📂  Upload Image", "📷  Live Camera"])
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# TAB 1 — Upload
+# ════════════════════════════════════════════════════════════════════════════════
+with tab_upload:
+    uploaded = st.file_uploader("Upload a parking lot frame", type=["png", "jpg", "jpeg", "webp"])
+
+    if uploaded is not None:
+        file_bytes = np.asarray(bytearray(uploaded.read()), dtype=np.uint8)
+        img_bgr    = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+
+        if img_bgr is None:
+            st.error("Could not decode image.")
+            st.stop()
+
+        render_results(img_bgr, source_label="Original Upload")
+
+    else:
+        st.markdown("""
+        <div style="text-align:center; padding: 4rem 2rem; color: #333; font-family: 'Space Mono', monospace; font-size: 0.8rem; letter-spacing: 1px;">
+            ↑ &nbsp; UPLOAD A FRAME FROM YOUR PARKING LOT VIDEO ABOVE<br><br>
+            Supports PNG · JPG · WEBP
+        </div>
+        """, unsafe_allow_html=True)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# TAB 2 — Camera
+# ════════════════════════════════════════════════════════════════════════════════
+with tab_camera:
     st.markdown("""
-    <div style="text-align:center; padding: 4rem 2rem; color: #333; font-family: 'Space Mono', monospace; font-size: 0.8rem; letter-spacing: 1px;">
-        ↑ &nbsp; UPLOAD A FRAME FROM YOUR PARKING LOT VIDEO ABOVE<br><br>
-        Supports PNG · JPG · WEBP
+    <div class="cam-info">
+        📷 &nbsp; LIVE CAMERA MODE<br>
+        <span>─────────────────────────────────────────</span><br>
+        Click <b>Capture Frame</b> to take a snapshot from your device camera.<br>
+        The captured frame is then passed through the <b>same parking analysis</b> pipeline.<br><br>
+        <span>REQUIREMENTS &nbsp;·&nbsp; Allow camera access when prompted by your browser.</span><br>
+        <span>POSITIONS &nbsp;·&nbsp; CarParkPos must match the camera's field of view.</span>
     </div>
     """, unsafe_allow_html=True)
+
+    # st.camera_input is Streamlit's built-in — opens device camera, returns a snapshot
+    camera_frame = st.camera_input("Point your camera at the parking lot and capture a frame")
+
+    if camera_frame is not None:
+        file_bytes = np.asarray(bytearray(camera_frame.read()), dtype=np.uint8)
+        img_bgr    = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+
+        if img_bgr is None:
+            st.error("Could not decode camera frame.")
+        else:
+            st.success("Frame captured — running analysis...")
+            render_results(img_bgr, source_label="Camera Capture")
+    else:
+        st.markdown("""
+        <div style="text-align:center; padding: 2rem 2rem 3rem; color: #333; font-family: 'Space Mono', monospace; font-size: 0.75rem; letter-spacing: 1px;">
+            ↑ &nbsp; GRANT CAMERA ACCESS AND HIT THE BUTTON TO CAPTURE A FRAME
+        </div>
+        """, unsafe_allow_html=True)

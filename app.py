@@ -63,7 +63,7 @@ def load_positions():
 posList = load_positions()
 
 # ── Minimum threshold floor ───────────────────────────────────────────────────
-MIN_THRESHOLD = 400
+MIN_THRESHOLD = 350
 
 
 # ── Auto-calibrate threshold ──────────────────────────────────────────────────

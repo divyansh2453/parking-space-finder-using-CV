@@ -66,13 +66,13 @@ posList = load_positions()
 MIN_THRESHOLD = 350
 
 #----------------------Hide Streamlit footer----------------------------
-hide_st_style = “”"
+hide_st_style = """
 
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 header {visibility: hidden;}
 
-“”"
+"""
 st.markdown(hide_st_style, unsafe_allow_html=True)
 #--------------------------------------------------------------------
 
